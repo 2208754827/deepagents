@@ -1,0 +1,21 @@
+# Deep Agents 框架
+deepagents>=0.7.3
+langchain>=1.3.0
+langchain-openai>=1.3.0
+langgraph>=1.2.0
+
+# 环境变量
+python-dotenv>=1.0.0
+
+# 结构化输出
+pydantic>=2.0.0
+
+# 终端美化
+rich>=13.0.0
+
+# XLSX 生成（scripts/generate_xlsx.py 需要）
+openpyxl>=3.1.0
+
+# PDF 解析（可选，requirements_preprocessor.py 需要）
+# pypdf>=4.0.0
+# pdfplumber>=0.10.0
