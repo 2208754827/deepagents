@@ -285,6 +285,23 @@ class TestMatchSectionByKeyword:
         matched = _match_section_by_keyword(outline, "")
         assert matched == []
 
+    def test_duplicate_title_picks_deepest(self):
+        """同名标题出现在多个层级时，只取最深层级及其子节"""
+        text = (
+            "# 文档\n\n"
+            "## 印花税计算\n\n二级内容。\n\n"
+            "### 印花税计算\n\n"
+            "#### 功能描述\n\n三级内容。\n"
+        )
+        outline = _parse_markdown_outline(text)
+        matched = _match_section_by_keyword(outline, "印花税计算")
+        levels = [h["level"] for h in matched]
+        # 只命中三级（最深），不包含二级
+        assert 3 in levels
+        assert 2 not in levels
+        # 子节（四级）应包含
+        assert 4 in levels
+
 
 # ============================================================
 # _extract_text_by_headings

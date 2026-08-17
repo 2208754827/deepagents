@@ -116,30 +116,43 @@ def _match_section_by_number(outline: list[dict], section_range: str) -> list[di
 
 
 def _match_section_by_keyword(outline: list[dict], keyword: str) -> list[dict]:
-    """按关键词在标题中模糊匹配章节。
+    """按关键词在标题中匹配章节。
 
-    keyword 会在标题文本中做子串匹配（忽略大小写）。
-    返回匹配到的章节（含子节）。
+    匹配策略（精确优先）：
+    1. 精确匹配：标题文本 == keyword → 若同名标题出现在多个层级，取最深层级
+       （最里面的子章节）那一个及其子节；只有一个时取它及其子节
+    2. 模糊匹配：无精确命中时，标题文本包含 keyword → 取所有命中标题及其子节
+
+    这样当文档中同时存在 "印花税计算"（二级大章节）和 "印花税计算"（三级小节）时，
+    用户输入 "印花税计算" 只会命中三级小节（最深层级），而不会把整个二级大章节
+    也拉进来，也不会把 "印花税计算结果" 等子串命中的标题拉进来。
     """
     if not keyword or not outline:
         return []
 
     keyword_lower = keyword.lower()
-    matched = []
 
-    # 找到标题包含关键词的章节
-    primary_matches = []
-    for h in outline:
-        if keyword_lower in h["title"].lower():
-            primary_matches.append(h)
+    # 1. 尝试精确匹配
+    exact_matches = [h for h in outline if h["title"].lower() == keyword_lower]
+
+    if exact_matches:
+        # 同名标题出现在多个层级时，取最深层级（最里面的子章节）那一个
+        target = max(exact_matches, key=lambda h: h["level"])
+        matched = [target]
+        for sub in outline:
+            if sub["level"] > target["level"] and sub["start"] >= target["start"] and sub["start"] < target["end"]:
+                matched.append(sub)
+        return matched
+
+    # 2. 无精确命中，fallback 到子串模糊匹配
+    primary_matches = [h for h in outline if keyword_lower in h["title"].lower()]
 
     if not primary_matches:
         return []
 
-    # 收集匹配章节及其子节
+    matched = []
     for h in primary_matches:
         matched.append(h)
-        # 子节：level 更深，start 在当前章节范围内
         for sub in outline:
             if sub["level"] > h["level"] and sub["start"] >= h["start"] and sub["start"] < h["end"]:
                 matched.append(sub)

@@ -7,7 +7,8 @@
 默认采用幂等策略：如果对应的 .md 已存在，则跳过转换，不覆盖已有内容。
 
 支持：
-- .docx：直接解析 Word XML
+- .docx：优先使用 mammoth 转 HTML → markdownify 转 Markdown（标题/表格识别准确）；
+          mammoth 不可用时 fallback 到手写 XML 解析
 - .doc：通过 LibreOffice / soffice 另存为临时 docx 后再解析（可选）
 - .pdf：优先使用已安装的 PDF 解析库提取文本
 """
@@ -35,6 +36,37 @@ SUPPORTED_EXTENSIONS = {".doc", ".docx", ".pdf"}
 def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
+
+# ============================================================
+# mammoth + markdownify 路径（优先）
+# ============================================================
+
+def _docx_to_markdown_mammoth(docx_path: Path) -> str:
+    """使用 mammoth 转 HTML，再 markdownify 转 Markdown。
+
+    优势：正确识别自定义 styleId 的标题（如 styleId="1" → name="heading 1"），
+    表格自动渲染为 Markdown 管道表格。
+    """
+    import mammoth
+    import markdownify
+
+    with open(str(docx_path), "rb") as f:
+        result = mammoth.convert_to_html(f)
+
+    html = result.value
+
+    # 去掉 base64 内嵌图片（需求文档的 UI 原型截图，测试用例不需要；避免 12MB+ 体积）
+    html = re.sub(r"<img[^>]*>", "", html)
+
+    # HTML → Markdown（ATX 风格标题，去掉 <a> 锚点标签）
+    md = markdownify.markdownify(html, heading_style="ATX", strip=["a"])
+
+    return md.strip() + "\n"
+
+
+# ============================================================
+# 手写 XML 解析路径（fallback）
+# ============================================================
 
 def _get_paragraph_style(paragraph: ET.Element) -> str:
     style = paragraph.find("w:pPr/w:pStyle", NS)
@@ -129,7 +161,13 @@ def _extract_table_rows(table: ET.Element) -> List[List[str]]:
     return rows
 
 
-def _docx_to_markdown(docx_path: Path) -> str:
+def _docx_to_markdown_xml(docx_path: Path) -> str:
+    """手写 XML 解析：直接解压 docx 读取 document.xml。
+
+    已知缺陷：只识别 styleId 包含 "Heading" 的标题样式，
+    无法识别 styleId 为纯数字（如 "1" → name="heading 1"）的自定义样式。
+    保留作 mammoth 不可用时的 fallback。
+    """
     with zipfile.ZipFile(docx_path, "r") as zf:
         try:
             document_xml = zf.read("word/document.xml")
@@ -174,6 +212,26 @@ def _docx_to_markdown(docx_path: Path) -> str:
         lines.pop()
 
     return "\n".join(lines).strip() + ("\n" if lines else "")
+
+
+# ============================================================
+# 统一入口：优先 mammoth，fallback 手写 XML
+# ============================================================
+
+def _docx_to_markdown(docx_path: Path) -> str:
+    """将 .docx 转为 Markdown。
+
+    优先使用 mammoth + markdownify（标题识别准确，支持自定义 styleId）；
+    mammoth 不可用时 fallback 到手写 XML 解析。
+    """
+    try:
+        return _docx_to_markdown_mammoth(docx_path)
+    except ImportError:
+        pass
+    except Exception as exc:
+        print(f"  [警告] mammoth 转换失败，回退到 XML 解析: {exc}", file=sys.stderr)
+
+    return _docx_to_markdown_xml(docx_path)
 
 
 def _doc_to_docx(doc_path: Path) -> Path:
