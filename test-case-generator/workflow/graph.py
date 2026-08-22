@@ -10,6 +10,7 @@ import os
 
 from deepagents import CompiledSubAgent, create_deep_agent
 from deepagents.backends import FilesystemBackend
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from workflow.config import BASE_DIR, MODEL, logger
@@ -26,6 +27,9 @@ from workflow.nodes import (
 )
 from workflow.prompts import ORCHESTRATOR_PROMPT
 from workflow.state import WorkflowState
+
+# 模块级 checkpointer 单例
+_workflow_checkpointer = MemorySaver()
 
 
 # ============================================================
@@ -127,12 +131,19 @@ def create_test_case_agent(debug: bool = False):
     """创建测试用例生成 Agent
 
     主 Agent 负责用户对话，工作流子 Agent 负责确定性执行生成流程。
+    主 Agent 默认带 MemorySaver checkpointer，支持子图 interrupt 暂停 → 用户确认/取消 → 断点恢复。
+    子图节点未调用 interrupt() 时行为与无 checkpointer 时完全一致，零退化。
+
+    Args:
+        debug: 是否启用 Agent debug 模式
 
     middleware 策略：
     - WorkflowTriggerFallbackMiddleware 始终注册（增强 3 后备机制）
     - FixToolCallArgsMiddleware 默认不注册（官方 DeepSeek 无 {} 前缀畸形 tool_call）；
       切回中转站时设 RELAY_FIX_TOOLCALL=true 启用
     """
+    from workflow.subagents.demo_gate import get_demo_runnable
+
     # 编译工作流图
     workflow_runnable = create_workflow_runnable()
 
@@ -141,6 +152,13 @@ def create_test_case_agent(debug: bool = False):
         name="generate-workflow",
         description="执行测试用例生成工作流：预处理需求文档 → 解析 → 设计用例 → 审查 → 生成 XMind/XLSX 文件。当用户要求生成测试用例时使用。",
         runnable=workflow_runnable,
+    )
+
+    # 注册 demo 子 Agent（演示阶段确认门；用户不主动提及则不会被调用）
+    demo_subagent = CompiledSubAgent(
+        name="demo-gate",
+        description="演示阶段确认门：执行后会在准备阶段后暂停，询问用户是否继续。当用户要求执行演示或测试确认门功能时使用。",
+        runnable=get_demo_runnable(),
     )
 
     # 组装 middleware 列表
@@ -155,12 +173,13 @@ def create_test_case_agent(debug: bool = False):
         model=MODEL,
         system_prompt=ORCHESTRATOR_PROMPT,
         tools=[],
-        subagents=[workflow_subagent],
+        subagents=[workflow_subagent, demo_subagent],
+        checkpointer=_workflow_checkpointer,
         memory=["./AGENTS.md"],
         middleware=middleware_list,
         backend=FilesystemBackend(root_dir=BASE_DIR, virtual_mode=False),
         name="test-case-generator",
         debug=debug,
     )
-    logger.info("Deep agent created with model=%s + workflow subagent", MODEL)
+    logger.info("Deep agent created with model=%s + 2 subagents, checkpointer enabled", MODEL)
     return agent

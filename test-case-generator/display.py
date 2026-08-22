@@ -121,3 +121,63 @@ class AgentDisplay:
             if self.file_logging:
                 preview = content_str[:500] if content_str else ""
                 tool_logger.debug("TOOL RESULT: %s → %s", name, preview)
+
+    # ============================================================
+    # 阶段确认门交互方法（约束2：只读 interrupt_value["payload"]）
+    # ============================================================
+
+    def ask(self, interrupt_value: dict):
+        """展示阶段确认门：stage + question + payload，提示用户确认。
+
+        约束2: 只读 interrupt_value["payload"]，绝不触碰子图 state（上下文隔离）。
+        """
+        stage = interrupt_value.get("stage", "unknown")
+        question = interrupt_value.get("question", "是否继续？")
+        payload = interrupt_value.get("payload", {})
+
+        payload_display = json.dumps(payload, ensure_ascii=False, indent=2) if payload else "(无)"
+
+        console.print()
+        console.print(Panel(
+            f"[bold]阶段: {stage}[/]\n\n"
+            f"{question}\n\n"
+            f"[dim]产出摘要:[/]\n"
+            f"[dim]{payload_display}[/]",
+            title="🛑 阶段确认门",
+            border_style="yellow",
+        ))
+        console.print()
+
+    def read_user_decision(self) -> dict:
+        """读用户输入 → {"confirm": bool, "feedback": str|None}。
+
+        y/yes/继续/是 → confirm=True, feedback=None
+        n/no/取消/否 → confirm=False, feedback=None
+        其它文本 → confirm=True, feedback=文本（用户附反馈后继续）
+        """
+        while True:
+            try:
+                text = input("继续? (y/n, 或输入反馈后继续): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return {"confirm": False, "feedback": None}
+
+            if not text:
+                continue
+
+            if text in ("y", "yes", "继续", "是"):
+                return {"confirm": True, "feedback": None}
+            elif text in ("n", "no", "取消", "否"):
+                return {"confirm": False, "feedback": None}
+            else:
+                # 任意其它文本 → 视为确认 + 附带反馈
+                return {"confirm": True, "feedback": text}
+
+    def abort(self):
+        """展示用户取消/流程终止。"""
+        console.print()
+        console.print(Panel(
+            "[bold yellow]用户已取消，流程终止。[/]",
+            title="阶段确认门",
+            border_style="red",
+        ))
+        console.print()

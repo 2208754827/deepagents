@@ -14,7 +14,9 @@ import argparse
 import asyncio
 import io
 import sys
+import uuid
 
+from langgraph.types import Command
 from rich.live import Live
 
 from display import AgentDisplay
@@ -99,20 +101,35 @@ async def main():
 
         try:
             with Live(display.spinner, console=console, refresh_per_second=10, transient=True) as live:
-                async for chunk in agent.astream(
-                    {"messages": [("user", user_input)]},
-                    config={"configurable": {"thread_id": "test-case-gen"}},
-                    stream_mode="values",
-                ):
-                    if "messages" in chunk:
-                        messages = chunk["messages"]
-                        if len(messages) > display.printed_count:
-                            live.stop()
-                            for msg in messages[display.printed_count:]:
-                                display.print_message(msg)
-                            display.printed_count = len(messages)
-                            live.start()
-                            live.update(display.spinner)
+                # 每轮新 thread_id，支持子图 interrupt 暂停/断点恢复
+                thread_id = str(uuid.uuid4())
+                config = {"configurable": {"thread_id": thread_id}}
+                pending = {"messages": [("user", user_input)]}
+                while True:
+                    async for chunk in agent.astream(pending, config=config, stream_mode="values"):
+                        if "messages" in chunk:
+                            messages = chunk["messages"]
+                            if len(messages) > display.printed_count:
+                                live.stop()
+                                for msg in messages[display.printed_count:]:
+                                    display.print_message(msg)
+                                display.printed_count = len(messages)
+                                live.start()
+                                live.update(display.spinner)
+                    # 检查是否有中断需要处理（子图节点调用了 interrupt()）
+                    state = agent.get_state(config)
+                    if not state.interrupts:
+                        break  # 正常结束
+                    live.stop()  # 暂停 live 显示，准备展示确认门
+                    iv = state.interrupts[0].value
+                    display.ask(iv)  # 展示 stage + question + payload
+                    answer = display.read_user_decision()  # {"confirm": bool, "feedback": str|None}
+                    if not answer.get("confirm"):
+                        display.abort()  # 用户取消
+                        break
+                    live.start()  # 恢复 live 显示
+                    live.update(display.spinner)
+                    pending = Command(resume=answer)  # 从断点恢复，循环继续
         except KeyboardInterrupt:
             console.print("\n[yellow]已中断[/]")
             continue
